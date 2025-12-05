@@ -8,3 +8,7 @@ tempignore
 
 */.ipynb_checkpoints/*
 */__pycache__/*
+
+
+/checkpoints
+/data

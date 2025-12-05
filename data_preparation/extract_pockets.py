@@ -4,7 +4,9 @@ import multiprocessing as mp
 import pickle
 import shutil
 from functools import partial
+import sys
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tqdm.auto import tqdm
 
 from utils.protein_ligand import PDBProtein, parse_sdf_file
@@ -71,7 +73,7 @@ if __name__ == '__main__':
 
     pool = mp.Pool(args.num_workers)
     index_pocket = []
-    for item_pocket in tqdm(pool.imap_unordered(partial(process_item, args=args), index), total=len(index))
+    for item_pocket in tqdm(pool.imap_unordered(partial(process_item, args=args), index), total=len(index)):
         if item_pocket is not None:
             index_pocket.append(item_pocket)
     pool.close()
