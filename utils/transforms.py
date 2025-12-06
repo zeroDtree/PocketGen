@@ -9,7 +9,7 @@ import numpy as np
 from copy import deepcopy
 from torch_geometric.transforms import Compose
 from torch_geometric.nn.pool import knn_graph
-from torch_geometric.utils.subgraph import subgraph
+from torch_geometric.utils import subgraph
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.data import Data, Batch
 from torch_scatter import scatter_add

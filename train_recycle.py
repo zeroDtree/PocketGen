@@ -73,6 +73,9 @@ if __name__ == '__main__':
     val_loader = DataLoader(val_set, batch_size=config.train.batch_size, shuffle=False,
                             num_workers=config.train.num_workers, collate_fn=partial(collate_mols_block, batch_converter=batch_converter))
 
+
+    exit()
+
     # Model
     logger.info('Building model...')
     model = Pocket_Design_new(
