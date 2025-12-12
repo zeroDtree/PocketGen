@@ -22,6 +22,10 @@ from .common import *
 from .protein_features import *
 from .esmadapter import *
 from .esm2adapter import *
+
+import sys
+import os
+
 from utils.pdb_utils import VOCAB
 from utils.rmsd import kabsch_torch
 from utils.protein_ligand import PDBProtein
@@ -303,7 +307,8 @@ class Pocket_Design_new(Module):
         res_H[~residue_mask] = res_H[~residue_mask] + self.residue_embedding(res_S[~residue_mask]).unsqueeze(-2)
         '''
 
-        res_H, res_X, ligand_pos, ligand_feat, pred_res_type = self.encoder(res_H, res_X, res_S, res_batch, pred_ligand, ligand_feat, ligand_mask, edit_residue_num, residue_mask)
+        res_H, res_X, ligand_pos, ligand_feat, pred_res_type, attend = self.encoder(res_H, res_X, res_S, res_batch, pred_ligand, ligand_feat, ligand_mask, edit_residue_num, residue_mask)
+        # res_H, res_X, ligand_pos, ligand_feat, pred_res_type, attend
 
         if use_esm and self.seq.shape[1] <= 1000:
             h_residue = res_H.sum(-2)

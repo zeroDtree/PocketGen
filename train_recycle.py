@@ -74,7 +74,7 @@ if __name__ == '__main__':
                             num_workers=config.train.num_workers, collate_fn=partial(collate_mols_block, batch_converter=batch_converter))
 
 
-    exit()
+    # exit()
 
     # Model
     logger.info('Building model...')
