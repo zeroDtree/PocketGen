@@ -57,14 +57,18 @@ micromamba activate pocketgen
 ## 3. Install CUDA PyTorch (critical)
 
 Install a **CUDA** build and pin `pytorch-mutex=cuda`.  
-Avoid letting later conda installs silently replace it with a CPU build.
+Also pin **`mkl=2023.*`**: newer MKL (2024+/2026) with PyTorch 1.13 often fails on import with
+`undefined symbol: iJIT_NotifyEvent`.  
+Avoid letting later conda installs silently replace torch with a CPU build or upgrade MKL.
 
 ```fish
 micromamba install -y --channel-priority flexible \
   -c pytorch -c nvidia -c conda-forge \
   'pytorch=1.13.1=py3.8_cuda11.7*' \
   'pytorch-cuda=11.7' \
-  'pytorch-mutex=1.0=cuda'
+  'pytorch-mutex=1.0=cuda' \
+  'mkl=2023.*' \
+  'mkl-include=2023.*'
 ```
 
 Verify:
@@ -85,7 +89,8 @@ Install these **after** CUDA PyTorch. If the solver tries to replace `pytorch` w
 micromamba install -y -c conda-forge \
   rdkit openbabel tensorboard pyyaml easydict python-lmdb \
   openmm pdbfixer flask \
-  numpy swig boost-cpp sphinx sphinx_rtd_theme
+  numpy swig boost-cpp sphinx sphinx_rtd_theme \
+  'mkl=2023.*' 'mkl-include=2023.*'
 ```
 
 Re-check CUDA after this step:
@@ -219,9 +224,10 @@ cuda 0 python generate_new.py
 1. **`pocketgen.yaml` fails to solve** — pinned Anaconda builds / missing channels / strict priority.
 2. **README `pytorch-cuda=11.6` + `pyg` can resolve to CPU torch** (`pytorch-mutex=cpu`). Always verify `torch.cuda.is_available()`.
 3. **Later `micromamba install openmm ...` can uninstall `pytorch-cuda` / `pyg`**. Re-pin CUDA torch (step 3) and reinstall PyG CUDA wheels (step 5) if that happens.
-4. **Building PyG extensions from source against system CUDA 12/13 fails** with torch cu117. Use the prebuilt `+pt113cu117` wheels.
-5. **Disk full** causes `libmamba Write failed` during extract (e.g. `libboost-headers`). Free space / `micromamba clean -a` first.
-6. Generation needs `./checkpoints/checkpoint.pt` and a `tmp/` directory under the run folder.
+4. **`libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent`** — MKL too new (e.g. 2026) with PyTorch 1.13. Pin `mkl=2023.*` (done in `prepare.sh`).
+5. **Building PyG extensions from source against system CUDA 12/13 fails** with torch cu117. Use the prebuilt `+pt113cu117` wheels.
+6. **Disk full** causes `libmamba Write failed` during extract (e.g. `libboost-headers`). Free space / `micromamba clean -a` first.
+7. Generation needs `./checkpoints/checkpoint.pt` and a `tmp/` directory under the run folder.
 
 ---
 

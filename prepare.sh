@@ -79,12 +79,16 @@ create_env() {
 }
 
 install_cuda_pytorch() {
-  info "Installing CUDA PyTorch 1.13.1 + pytorch-cuda=11.7"
+  # Pin MKL 2023.*: MKL 2024+/2026 with pytorch 1.13 often breaks import with
+  #   libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent
+  info "Installing CUDA PyTorch 1.13.1 + pytorch-cuda=11.7 (MKL 2023.* pinned)"
   micromamba install -n "$ENV_NAME" -y --channel-priority flexible \
     -c pytorch -c nvidia -c conda-forge \
     'pytorch=1.13.1=py3.8_cuda11.7*' \
     'pytorch-cuda=11.7' \
-    'pytorch-mutex=1.0=cuda'
+    'pytorch-mutex=1.0=cuda' \
+    'mkl=2023.*' \
+    'mkl-include=2023.*'
 }
 
 assert_cuda() {
@@ -100,22 +104,28 @@ print("device", torch.cuda.get_device_name(0))
 PY
 }
 
+torch_import_ok() {
+  mamba_run python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"
+}
+
 repair_cuda_if_needed() {
-  if mamba_run python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"; then
+  if torch_import_ok; then
     info "CUDA still available after conda-forge stack"
     return 0
   fi
-  warn "CUDA became unavailable after conda installs; re-pinning CUDA PyTorch"
+  warn "torch import/CUDA broken after conda installs; re-pinning CUDA PyTorch + MKL 2023.*"
   install_cuda_pytorch
-  assert_cuda "after repair" || die "CUDA still unavailable after repair. Aborting."
+  assert_cuda "after repair" || die "torch/CUDA still broken after repair. Aborting."
 }
 
 install_conda_forge_stack() {
-  info "Installing conda-forge scientific stack"
+  info "Installing conda-forge scientific stack (keep mkl=2023.*)"
   micromamba install -n "$ENV_NAME" -y -c conda-forge \
     rdkit openbabel tensorboard pyyaml easydict python-lmdb \
     openmm pdbfixer flask \
-    numpy swig boost-cpp sphinx sphinx_rtd_theme
+    numpy swig boost-cpp sphinx sphinx_rtd_theme \
+    'mkl=2023.*' \
+    'mkl-include=2023.*'
 }
 
 install_pip_and_pyg() {
