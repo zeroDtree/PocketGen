@@ -20,7 +20,7 @@
 		}
 	},
 	"terminal.integrated.defaultProfile.linux": "fish",
-	"python.languageServer": "Pylance",
+	"python.languageServer": "None",
 	"autoDocstring.customTemplatePath": ".mustache",
 	"python.analysis.autoImportCompletions": true,
 }
