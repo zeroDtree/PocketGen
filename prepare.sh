@@ -78,6 +78,13 @@ create_env() {
   fi
 }
 
+install_git() {
+  # micromamba run does not inherit base-env PATH; pip git+https needs git
+  # inside this env (AutoDockTools_py3).
+  info "Installing git into '$ENV_NAME'"
+  micromamba install -n "$ENV_NAME" -c conda-forge git -y
+}
+
 install_cuda_pytorch() {
   # Pin MKL 2023.*: MKL 2024+/2026 with pytorch 1.13 often breaks import with
   #   libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent
@@ -276,6 +283,7 @@ main() {
   info "Repo root: $ROOT"
   preflight
   create_env
+  install_git
   install_cuda_pytorch
   assert_cuda "after pytorch install" || die "CUDA PyTorch install failed verification"
   install_conda_forge_stack
