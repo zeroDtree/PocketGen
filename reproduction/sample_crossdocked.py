@@ -69,6 +69,7 @@ def parse_args() -> argparse.Namespace:
 
 
 FAILURES_JSONL = "failures.jsonl"
+_RELAX_FALLBACK_PATHS = set()
 
 
 def _finite_positions(positions) -> bool:
@@ -147,6 +148,7 @@ def safe_openmm_relax(pdb, out_pdb=None, excluded_chains=None, inverse_exclude=F
         print(f"Warning: openmm_relax failed for {pdb}: {exc}; copying unrelaxed PDB to {out_pdb}")
         if os.path.exists(pdb):
             shutil.copyfile(pdb, out_pdb)
+        _RELAX_FALLBACK_PATHS.add(os.path.abspath(out_pdb))
         return out_pdb
 
 
@@ -256,6 +258,10 @@ def record_sample(example, complex_id: str, complex_index: int, sample_id: int, 
         "ref_pocket_pdb": example["protein_filename"],
         "ref_ligand_sdf": example["ligand_filename"],
         "paths": paths,
+        "relax_fallback": any(
+            os.path.abspath(paths[key]) in _RELAX_FALLBACK_PATHS
+            for key in ("pocket_relaxed", "whole_relaxed")
+        ),
     }
 
 
@@ -315,10 +321,7 @@ def main() -> None:
         complex_id = make_complex_id(complex_index, example["ligand_filename"])
         complex_dir = ensure_dir(os.path.join(out_dir, complex_id))
         already = existing_sample_ids(out_dir, complex_id)
-        start_sample = 0
-        if already:
-            start_sample = max(already) + 1
-        remaining = list(range(start_sample, args.num_samples))
+        remaining = [i for i in range(args.num_samples) if i not in already]
         if not remaining:
             print(f"Skipping {complex_id}: already sampled")
             continue

@@ -169,6 +169,25 @@ def select_residues_by_resseq(
     return [res for res in residues if res["resseq"] in wanted]
 
 
+def residue_indices_by_resseq(
+    residues: Sequence[Dict[str, Any]], resseqs: Sequence[int]
+) -> List[int]:
+    wanted = set(int(x) for x in resseqs)
+    return [i for i, res in enumerate(residues) if res["resseq"] in wanted]
+
+
+def select_residues_by_index(
+    residues: Sequence[Dict[str, Any]], indices: Sequence[int]
+) -> List[Dict[str, Any]]:
+    n = len(residues)
+    selected: List[Dict[str, Any]] = []
+    for raw in indices:
+        idx = int(raw)
+        if 0 <= idx < n:
+            selected.append(residues[idx])
+    return selected
+
+
 def sequence_recovery(pred: str, ref: str) -> Optional[float]:
     if not pred or not ref or len(pred) != len(ref):
         n = min(len(pred), len(ref))

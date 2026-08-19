@@ -19,6 +19,7 @@ if _REPO_ROOT not in sys.path:
 from reproduction.common import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_TMP_DIR,
+    append_jsonl,
     ensure_dir,
     ensure_repo_on_path,
     group_by_complex,
@@ -123,6 +124,32 @@ def _eval_one(task: Dict[str, Any], tmp_dir: str, exhaustiveness: int, n_poses: 
     return {"key": task["key"], "vina": score}
 
 
+def scores_from_affinity(payload: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    scores: Dict[str, Optional[float]] = {}
+    for item in payload.get("per_sample") or []:
+        cid = item["complex_id"]
+        sid = item["sample_id"]
+        scores[f"gen::{cid}::{sid}"] = item.get("vina")
+        if item.get("ref_vina") is not None:
+            scores[f"ref::{cid}"] = item.get("ref_vina")
+    for item in payload.get("per_complex") or []:
+        if not isinstance(item, dict):
+            continue
+        cid = item.get("complex_id")
+        if cid is not None and item.get("ref_vina") is not None:
+            scores[f"ref::{cid}"] = item["ref_vina"]
+    return scores
+
+
+def scores_from_jsonl(path: str) -> Dict[str, Optional[float]]:
+    scores: Dict[str, Optional[float]] = {}
+    for item in load_jsonl(path):
+        key = item.get("key")
+        if key:
+            scores[key] = item.get("vina")
+    return scores
+
+
 def main() -> None:
     args = parse_args()
     sample_dir = resolve_repo_path(args.sample_dir)
@@ -132,9 +159,12 @@ def main() -> None:
         raise SystemExit(f"No samples found in {samples_path(sample_dir)}")
 
     existing_path = os.path.join(sample_dir, "affinity.json")
-    previous: Dict[str, Any] = {}
-    if args.skip_existing and os.path.exists(existing_path):
-        previous = json.load(open(existing_path))
+    jsonl_path = os.path.join(sample_dir, "vina_scores.jsonl")
+    scores: Dict[str, Optional[float]] = {}
+    if os.path.exists(existing_path):
+        with open(existing_path) as handle:
+            scores.update(scores_from_affinity(json.load(handle)))
+    scores.update(scores_from_jsonl(jsonl_path))
 
     tasks: List[Dict[str, Any]] = []
     ref_done = set()
@@ -162,23 +192,24 @@ def main() -> None:
             }
         )
 
-    if args.skip_existing and previous.get("per_sample"):
-        known = {f"gen::{item['complex_id']}::{item['sample_id']}" for item in previous["per_sample"]}
-        known.update(f"ref::{cid}" for cid in previous.get("per_complex", {}))
-        tasks = [t for t in tasks if t["key"] not in known]
+    if args.skip_existing:
+        n_before = len(tasks)
+        tasks = [t for t in tasks if t["key"] not in scores]
+        print(f"Vina: skipping {n_before - len(tasks)} scored tasks, {len(tasks)} remaining")
 
-    scores: Dict[str, Optional[float]] = {}
     worker = partial(_eval_one, tmp_dir=tmp_dir, exhaustiveness=args.exhaustiveness, n_poses=args.n_poses)
     if args.num_workers <= 1:
         for task in tqdm(tasks, desc="Vina"):
             result = worker(task)
             scores[result["key"]] = result["vina"]
+            append_jsonl(jsonl_path, result)
     else:
         import multiprocessing as mp
 
         with mp.Pool(args.num_workers) as pool:
             for result in tqdm(pool.imap_unordered(worker, tasks), total=len(tasks), desc="Vina"):
                 scores[result["key"]] = result["vina"]
+                append_jsonl(jsonl_path, result)
 
     grouped = group_by_complex(rows)
     per_sample = []

@@ -26,7 +26,7 @@ Default protocol: **100 test complexes × 100 pockets** per complex (temperature
 | --- | --- |
 | Vina, top-k Vina, success rate | [`eval_affinity.py`](eval_affinity.py) |
 | AAR | Written into `samples.jsonl` during sampling |
-| Designability / scRMSD / scTM / pLDDT / ΔscTM | [`eval_designability.py`](eval_designability.py) (ESMFold; default `--sequence_source codesign`) |
+| Designability / scRMSD / scTM / pLDDT / ΔscTM | [`eval_designability.py`](eval_designability.py) (ESMFold; default `--sequence_source proteinmpnn`) |
 | PoseBusters | [`eval_ligand.py`](eval_ligand.py) |
 | PLIP interactions | [`eval_interaction.py`](eval_interaction.py) |
 | Bond / dihedral KL | [`eval_geometry.py`](eval_geometry.py) |
@@ -79,10 +79,10 @@ How this maps to [`eval_designability.py`](eval_designability.py):
 
 | Flag | Paper alignment |
 | --- | --- |
-| `--sequence_source codesign` (default) | Co path / `ΔscTM (+co)` using the generated sequence |
-| `--sequence_source proteinmpnn` | Shared MPNN×8 backbone protocol (main-table scRMSD / pLDDT / ΔscTM style) |
+| `--sequence_source proteinmpnn` (default) | Main protocol: ProteinMPNN×8 + ESMFold, keep lowest scRMSD. This is Fig. 2 / GitHub README designability 0.77 and Table S2-style scRMSD / pLDDT / ΔscTM. |
+| `--sequence_source codesign` | Co add-on only: fold the model's own sequence once. Use for Table 1 `ΔscTM (+co)`, not the main designability number. |
 
-This folder folds with **ESMFold** only (closer to paper Table S2 than Table 1 AF2).
+This folder folds with **ESMFold** only. That matches Table S2, **not** Table 1 (AF2). Do not compare ESMFold scTM / ΔscTM to Table 1 AF2 numbers.
 
 ## Practical pipeline
 
@@ -124,7 +124,7 @@ python reproduction/sample_crossdocked.py \
 
 Useful options: `--max_complexes`, `--start_index`, `--batch_size`, `--temperature`, `--seed`, `--ckpt`, `--device`.
 
-Resume with the same `--out_dir`. Complexes already fully recorded in `samples.jsonl` are skipped; a partial complex continues from `max(already) + 1`. Failed batches are appended to `failures.jsonl` and sampling continues.
+Resume with the same `--out_dir`. Complexes already fully recorded in `samples.jsonl` are skipped. A partial complex **fills missing sample ids** (`remaining = [i for i in range(num_samples) if i not in already]`), not `max(already) + 1`, so a hole such as missing 4–7 is generated instead of skipped. Failed batches are appended to `failures.jsonl` and sampling continues. If OpenMM minimization fails, the unrelaxed PDB is copied and the sample row records `relax_fallback: true`.
 
 Outputs under each complex directory include `{i}.pdb`, `{i}_relaxed.pdb`, `{i}_whole.pdb`, `{i}_whole_relaxed.pdb`, and `{i}.sdf`.
 
@@ -138,22 +138,26 @@ python reproduction/eval_affinity.py \
 
 Uses the official-style **10 Å fragment** `{i}_relaxed.pdb`. Default exhaustiveness is 64.
 
-### 3. Designability (ESMFold)
+`--skip_existing` **merges** previous `affinity.json` with `vina_scores.jsonl` (crash-safe append after each dock) and rebuilds the full summary over **all** samples. Skip keys use `per_complex[].complex_id`; they do not iterate `per_complex` as a dict. To recompute everything, delete `vina_scores.jsonl` and `affinity.json`.
 
-Requires Genie-side helpers: default TMscore at `../genie/packages/TMscore/TMscore`, plus ESMFold (and ProteinMPNN for the MPNN path).
+### 3. Designability (ESMFold, resumable)
+
+Requires Genie-side helpers: default TMscore at `../genie/packages/TMscore/TMscore`, plus ESMFold and ProteinMPNN.
+
+Default is **ProteinMPNN×8** (main paper / README 0.77 protocol). Writes `designability.json` (what [`aggregate_metrics.py`](aggregate_metrics.py) reads) and `designability.jsonl`. Reruns skip `(complex_id, sample_id)` already in the jsonl and rebuild the summary JSON at the end.
 
 ```bash
-# Co path (default): generated sequence
+# Main protocol: ProteinMPNN x8 + ESMFold, keep lowest scRMSD
+python reproduction/eval_designability.py \
+  --sample_dir reproduction/outputs/crossdocked_sample
+
+# Co add-on only: model's own sequence once (Delta scTM +co)
 python reproduction/eval_designability.py \
   --sample_dir reproduction/outputs/crossdocked_sample \
   --sequence_source codesign
-
-# Shared backbone protocol: ProteinMPNN x8
-python reproduction/eval_designability.py \
-  --sample_dir reproduction/outputs/crossdocked_sample \
-  --sequence_source proteinmpnn \
-  --out_json reproduction/outputs/crossdocked_sample/designability_mpnn.json
 ```
+
+The Co path writes `designability_codesign.json` / `designability_codesign.jsonl` so it does not overwrite the main MPNN summary.
 
 ### 4. Optional metrics
 
@@ -178,8 +182,8 @@ Writes `summary.json` / `summary.txt` from whatever metric JSON files are presen
 ## Implementation notes
 
 - **AAR** is computed on **3.5 Å designed residues**, not the full 10 Å pocket crop.
-- **Vina** docks against `{i}_relaxed.pdb` (10 Å fragment), matching official `generate_new.py`. Designability uses whole-protein PDBs.
-- **OpenMM**: [`sample_crossdocked.py`](sample_crossdocked.py) monkeypatches `openmm_relax` on both `utils.relax` and `models.PD` (PD binds the symbol at import). The patch clears PDBFixer `missingResidues` on discontinuous pocket fragments and copies the unrelaxed PDB to `{stem}_relaxed.pdb` if minimization fails.
+- **Vina** docks against `{i}_relaxed.pdb` (10 Å fragment), matching official `generate_new.py`. Designability uses whole-protein PDBs. Pocket scRMSD / pLDDT on ESMFold PDBs use **ordinal residue indices** (ESMFold is numbered 1..L), not crystal `designed_resseq`.
+- **OpenMM**: [`sample_crossdocked.py`](sample_crossdocked.py) monkeypatches `openmm_relax` on both `utils.relax` and `models.PD` (PD binds the symbol at import). The patch clears PDBFixer `missingResidues` on discontinuous pocket fragments and copies the unrelaxed PDB to `{stem}_relaxed.pdb` if minimization fails (`relax_fallback` on the sample row).
 - **Paper `±`**: mean ± std over **three independent training runs** with different seeds. Local `mean_std` is variation **within one sampling run**, not the paper `±`.
 - **Table 1 / S2 top-k designability** (rank pockets by Vina, then average structure metrics on top-1/3/5/10) is **not** auto-aggregated here. [`eval_affinity.py`](eval_affinity.py) reports top-k **Vina** only.
 
