@@ -24,9 +24,9 @@ from reproduction.common import (
     ensure_repo_on_path,
     group_by_complex,
     load_jsonl,
+    load_sample_rows,
     mean_std,
     resolve_repo_path,
-    samples_path,
     topk_mean,
     write_json,
 )
@@ -154,9 +154,9 @@ def main() -> None:
     args = parse_args()
     sample_dir = resolve_repo_path(args.sample_dir)
     tmp_dir = ensure_dir(resolve_repo_path(args.tmp_dir))
-    rows = load_jsonl(samples_path(sample_dir))
+    rows = load_sample_rows(sample_dir)
     if not rows:
-        raise SystemExit(f"No samples found in {samples_path(sample_dir)}")
+        raise SystemExit(f"No samples found in {sample_dir}")
 
     existing_path = os.path.join(sample_dir, "affinity.json")
     jsonl_path = os.path.join(sample_dir, "vina_scores.jsonl")

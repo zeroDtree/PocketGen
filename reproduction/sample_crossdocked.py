@@ -1,18 +1,18 @@
 """Sample PocketGen pockets on the CrossDocked test split.
 
-Writes per-complex PDB/SDF files and a samples.jsonl record of AAR/RMSD.
-Vina and other metrics are computed by separate evaluation scripts.
+Writes per-complex PDB/SDF files and stores AAR/RMSD rows in a ResumableSaver
+ledger (SQLite + pickles). Vina and other metrics are computed by separate
+evaluation scripts.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import json
 import os
 import shutil
 import sys
-from functools import partial
+from typing import List
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
@@ -20,10 +20,7 @@ if _REPO_ROOT not in sys.path:
 
 from reproduction.common import (
     DEFAULT_OUTPUT_DIR,
-    MANIFEST_JSON,
     REPO_ROOT,
-    SAMPLES_JSONL,
-    append_jsonl,
     ensure_dir,
     ensure_repo_on_path,
     make_complex_id,
@@ -33,14 +30,13 @@ from reproduction.common import (
     select_residues_by_resseq,
     sequence_recovery,
     tensor_to_python,
-    write_json,
 )
+from reproduction.utils.resumable_saver import ResumableSaver, build_sample_id
 
 ensure_repo_on_path()
 
 import esm  # noqa: E402
 import torch  # noqa: E402
-from torch.utils.data import DataLoader  # noqa: E402
 from torch_geometric.transforms import Compose  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
@@ -62,13 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_complexes", type=int, default=None)
     parser.add_argument("--start_index", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=3.0)
     parser.add_argument("--seed", type=int, default=2089)
     return parser.parse_args()
 
 
-FAILURES_JSONL = "failures.jsonl"
 _RELAX_FALLBACK_PATHS = set()
 
 
@@ -87,7 +81,6 @@ def safe_openmm_relax(pdb, out_pdb=None, excluded_chains=None, inverse_exclude=F
     from openmm import CustomExternalForce, LangevinIntegrator
     from openmm.app import ForceField, HBonds, Modeller, PDBFile, Simulation
     from pdbfixer import PDBFixer
-    from simtk.unit import angstroms, kilocalories_per_mole
 
     try:
         from openmm import unit as openmm_unit
@@ -101,7 +94,7 @@ def safe_openmm_relax(pdb, out_pdb=None, excluded_chains=None, inverse_exclude=F
 
     try:
         tolerance_in_kj = 2.39 * openmm_unit.kilojoules_per_mole / openmm_unit.kilocalories_per_mole
-        stiffness = 10.0 * kilocalories_per_mole / (angstroms ** 2)
+        stiffness = 10.0 * openmm_unit.kilocalories_per_mole / (openmm_unit.angstroms ** 2)
 
         fixer = PDBFixer(pdb)
         fixer.findNonstandardResidues()
@@ -198,17 +191,20 @@ def designed_resseqs(example) -> list:
     return [int(x) for x in tensor_to_python(selected)]
 
 
-def existing_sample_ids(out_dir: str, complex_id: str) -> set:
-    rows_path = os.path.join(out_dir, SAMPLES_JSONL)
-    done = set()
-    if not os.path.exists(rows_path):
-        return done
-    with open(rows_path, "r") as handle:
-        for line in handle:
-            row = json.loads(line)
-            if row.get("complex_id") == complex_id:
-                done.add(int(row["sample_id"]))
-    return done
+def consecutive_runs(ids: List[int]) -> List[List[int]]:
+    """Split integer ids into maximal consecutive runs."""
+    if not ids:
+        return []
+    runs: List[List[int]] = []
+    current = [ids[0]]
+    for value in ids[1:]:
+        if value == current[-1] + 1:
+            current.append(value)
+        else:
+            runs.append(current)
+            current = [value]
+    runs.append(current)
+    return runs
 
 
 def sample_paths(complex_dir: str, sample_id: int) -> dict:
@@ -265,6 +261,10 @@ def record_sample(example, complex_id: str, complex_index: int, sample_id: int, 
     }
 
 
+def job_id(complex_id: str, sample_id: int) -> str:
+    return build_sample_id(complex_id, sample_id)
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(resolve_repo_path(args.config))
@@ -283,8 +283,6 @@ def main() -> None:
 
     out_dir = resolve_repo_path(args.out_dir)
     ensure_dir(out_dir)
-    jsonl_path = os.path.join(out_dir, SAMPLES_JSONL)
-    failures_path = os.path.join(out_dir, FAILURES_JSONL)
 
     protein_featurizer = FeaturizeProteinAtom()
     ligand_featurizer = FeaturizeLigandAtom()
@@ -312,73 +310,81 @@ def main() -> None:
     end_index = n_complexes if args.max_complexes is None else min(n_complexes, args.start_index + args.max_complexes)
     print(f"Test complexes: {n_complexes}; sampling [{args.start_index}, {end_index}) x {args.num_samples}")
 
-    for complex_index in tqdm(range(args.start_index, end_index), desc="Complexes"):
-        example = absolutize_example(test_set[complex_index], orig_data_path, pocket10_path)
-        for required in ("whole_protein_name", "protein_filename", "ligand_filename"):
-            if not os.path.exists(example[required]):
-                raise FileNotFoundError(f"Missing {required}: {example[required]}")
+    with ResumableSaver(out_dir, retry_failed=True) as saver:
+        for complex_index in tqdm(range(args.start_index, end_index), desc="Complexes"):
+            example = absolutize_example(test_set[complex_index], orig_data_path, pocket10_path)
+            for required in ("whole_protein_name", "protein_filename", "ligand_filename"):
+                if not os.path.exists(example[required]):
+                    raise FileNotFoundError(f"Missing {required}: {example[required]}")
 
-        complex_id = make_complex_id(complex_index, example["ligand_filename"])
-        complex_dir = ensure_dir(os.path.join(out_dir, complex_id))
-        already = existing_sample_ids(out_dir, complex_id)
-        remaining = [i for i in range(args.num_samples) if i not in already]
-        if not remaining:
-            print(f"Skipping {complex_id}: already sampled")
-            continue
+            complex_id = make_complex_id(complex_index, example["ligand_filename"])
+            complex_dir = ensure_dir(os.path.join(out_dir, complex_id))
 
-        datalist = [copy.deepcopy(example) for _ in remaining]
-        model.generate_id = remaining[0]
-        model.generate_id1 = remaining[0]
-        loader = DataLoader(
-            datalist,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=partial(collate_mols_block, batch_converter=batch_converter),
-        )
-        sample_cursor = 0
-        with torch.no_grad():
-            for batch in loader:
-                batch_n = len(batch["protein_filename"])
-                sample_ids = remaining[sample_cursor : sample_cursor + batch_n]
-                model.generate_id = sample_ids[0]
-                model.generate_id1 = sample_ids[0]
-                for key in batch:
-                    if torch.is_tensor(batch[key]):
-                        batch[key] = batch[key].to(args.device)
-                try:
-                    aar, rmsd, _ = model.generate(batch, complex_dir)
-                except Exception as exc:
-                    fail_row = {
+            for sample_id in range(args.num_samples):
+                saver.register_pending(
+                    job_id(complex_id, sample_id),
+                    meta={
                         "complex_id": complex_id,
-                        "sample_ids": [int(x) for x in sample_ids],
-                        "exception": f"{type(exc).__name__}: {exc}",
-                    }
-                    append_jsonl(failures_path, fail_row)
-                    print(f"Failed {complex_id} samples {sample_ids}: {exc}")
-                    sample_cursor += batch_n
-                    continue
-                for sample_id in sample_ids:
-                    paths = sample_paths(complex_dir, sample_id)
-                    row = record_sample(example, complex_id, complex_index, sample_id, paths, aar, rmsd)
-                    append_jsonl(jsonl_path, row)
-                sample_cursor += batch_n
-                print(f"{complex_id} samples {sample_ids}: batch_aar={tensor_to_python(aar):.4f} rmsd={tensor_to_python(rmsd):.4f}")
+                        "complex_index": complex_index,
+                        "sample_id": sample_id,
+                    },
+                )
 
-    write_json(
-        os.path.join(out_dir, MANIFEST_JSON),
-        {
-            "config": resolve_repo_path(args.config),
-            "ckpt": ckpt_path,
-            "seed": args.seed,
-            "temperature": args.temperature,
-            "num_samples": args.num_samples,
-            "start_index": args.start_index,
-            "end_index": end_index,
-            "device": args.device,
-        },
-    )
-    print(f"Wrote samples to {jsonl_path}")
+            remaining = [
+                sample_id
+                for sample_id in range(args.num_samples)
+                if not saver.is_done(job_id(complex_id, sample_id))
+            ]
+            if not remaining:
+                print(f"Skipping {complex_id}: already sampled")
+                continue
+
+            with torch.no_grad():
+                for run in consecutive_runs(remaining):
+                    for start in range(0, len(run), args.batch_size):
+                        sample_ids = run[start : start + args.batch_size]
+                        assert sample_ids == list(range(sample_ids[0], sample_ids[0] + len(sample_ids)))
+
+                        model.generate_id = sample_ids[0]
+                        model.generate_id1 = sample_ids[0]
+                        batch = collate_mols_block(
+                            [copy.deepcopy(example) for _ in sample_ids],
+                            batch_converter=batch_converter,
+                        )
+                        for key in batch:
+                            if torch.is_tensor(batch[key]):
+                                batch[key] = batch[key].to(args.device)
+
+                        try:
+                            aar, rmsd, _ = model.generate(batch, complex_dir)
+                        except Exception as exc:
+                            for sample_id in sample_ids:
+                                saver.save_failure(job_id(complex_id, sample_id), exc)
+                            print(f"Failed {complex_id} samples {sample_ids}: {exc}")
+                            continue
+
+                        for sample_id in sample_ids:
+                            paths = sample_paths(complex_dir, sample_id)
+                            row = record_sample(
+                                example, complex_id, complex_index, sample_id, paths, aar, rmsd
+                            )
+                            saver.save_success(
+                                job_id(complex_id, sample_id),
+                                row,
+                                meta={
+                                    "complex_id": complex_id,
+                                    "complex_index": complex_index,
+                                    "sample_id": sample_id,
+                                },
+                            )
+                        print(
+                            f"{complex_id} samples {sample_ids}: "
+                            f"batch_aar={tensor_to_python(aar):.4f} rmsd={tensor_to_python(rmsd):.4f}"
+                        )
+
+        print(f"Saver stats: {saver.stats()}")
+
+    print(f"Wrote sample ledger under {out_dir}")
 
 
 if __name__ == "__main__":

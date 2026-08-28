@@ -14,11 +14,10 @@ if _REPO_ROOT not in sys.path:
 from reproduction.common import (
     DEFAULT_OUTPUT_DIR,
     group_by_complex,
-    load_jsonl,
+    load_sample_rows,
     mean_std,
     pairwise_identity,
     resolve_repo_path,
-    samples_path,
     write_json,
 )
 
@@ -33,9 +32,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     sample_dir = resolve_repo_path(args.sample_dir)
-    rows = load_jsonl(samples_path(sample_dir))
+    rows = load_sample_rows(sample_dir)
     if not rows:
-        raise SystemExit(f"No samples found in {samples_path(sample_dir)}")
+        raise SystemExit(f"No samples found in {sample_dir}")
 
     per_complex = []
     diversities: List[float] = []

@@ -19,10 +19,9 @@ from reproduction.common import (
     DEFAULT_TMP_DIR,
     ensure_dir,
     ensure_repo_on_path,
-    load_jsonl,
+    load_sample_rows,
     mean_std,
     resolve_repo_path,
-    samples_path,
     write_json,
 )
 
@@ -73,9 +72,9 @@ def main() -> None:
         raise SystemExit("plip is not on PATH. Install it in the pocketgen env with: conda install -c conda-forge plip")
     sample_dir = resolve_repo_path(args.sample_dir)
     tmp_root = ensure_dir(resolve_repo_path(args.tmp_dir))
-    rows = load_jsonl(samples_path(sample_dir))
+    rows = load_sample_rows(sample_dir)
     if not rows:
-        raise SystemExit(f"No samples found in {samples_path(sample_dir)}")
+        raise SystemExit(f"No samples found in {sample_dir}")
 
     ref_cache: Dict[str, Optional[Dict[str, int]]] = {}
     per_sample: List[Dict[str, Any]] = []

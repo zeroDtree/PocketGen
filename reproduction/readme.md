@@ -25,7 +25,7 @@ Default protocol: **100 test complexes × 100 pockets** per complex (temperature
 | Paper | This folder |
 | --- | --- |
 | Vina, top-k Vina, success rate | [`eval_affinity.py`](eval_affinity.py) |
-| AAR | Written into `samples.jsonl` during sampling |
+| AAR | Stored in ResumableSaver DONE payloads during sampling |
 | Designability / scRMSD / scTM / pLDDT / ΔscTM | [`eval_designability.py`](eval_designability.py) (ESMFold; default `--sequence_source proteinmpnn`) |
 | PoseBusters | [`eval_ligand.py`](eval_ligand.py) |
 | PLIP interactions | [`eval_interaction.py`](eval_interaction.py) |
@@ -89,7 +89,7 @@ This folder folds with **ESMFold** only. That matches Table S2, **not** Table 1 
 ```mermaid
 flowchart TD
   sample[sample_crossdocked.py]
-  samples["samples.jsonl + per-sample PDB/SDF"]
+  samples["ResumableSaver ledger + per-sample PDB/SDF"]
   sample --> samples
   samples --> affinity[eval_affinity.py]
   samples --> design[eval_designability.py]
@@ -107,11 +107,26 @@ flowchart TD
 
 ## How to run
 
-Activate the PocketGen environment and run from the PocketGen repo root.
+Run all commands from the PocketGen repo root.
+
+One-time environments:
 
 ```bash
-micromamba activate pocketgen
+bash prepare.sh
+bash reproduction/shell/set_up_genie.sh
+```
+
+`prepare.sh` creates `pocketgen` (Python 3.8, PyTorch 1.13.1+cu117). `set_up_genie.sh` clones that env to `eval` (conda packages only; micromamba clone omits pip), reinstalls the PocketGen pip + PyG cu117 stack, then overlays ProteinMPNN, ESMFold-era openfold, and TMscore without replacing torch. An existing `eval` that is not this clone is removed and recreated.
+
+| Step | Environment |
+| --- | --- |
+| Sampling, Vina, PoseBusters, PLIP, geometry, diversity | `pocketgen` or `eval` (same PocketGen stack after pip/PyG reinstall) |
+| Designability (`eval_designability.py`) | `eval` only |
+
+```bash
 cd /path/to/PocketGen
+micromamba activate pocketgen   # sampling / affinity / ligand / ...
+# or: micromamba activate eval  # required for designability
 ```
 
 ### 1. Sample (resumable)
@@ -124,11 +139,13 @@ python reproduction/sample_crossdocked.py \
 
 Useful options: `--max_complexes`, `--start_index`, `--batch_size`, `--temperature`, `--seed`, `--ckpt`, `--device`.
 
-Resume with the same `--out_dir`. Complexes already fully recorded in `samples.jsonl` are skipped. A partial complex **fills missing sample ids** (`remaining = [i for i in range(num_samples) if i not in already]`), not `max(already) + 1`, so a hole such as missing 4–7 is generated instead of skipped. Failed batches are appended to `failures.jsonl` and sampling continues. If OpenMM minimization fails, the unrelaxed PDB is copied and the sample row records `relax_fallback: true`.
+Resume with the same `--out_dir`. Progress lives in `manifest.db` (SQLite) and DONE payloads under `outputs/{shard}/{sample_id}.pkl` (readable keys such as `{complex_id}::{i}`). Missing or checksum-mismatched pickles are reset to `pending` on sampler start (`retry_failed=True`). Remaining sample ids are split into **consecutive runs**, then chunked by `--batch_size` (effective size ≤ `batch_size`) so upstream `generate_id + n` file names stay aligned. A failed `generate()` marks every id in that chunk as `failed` and continues. If OpenMM minimization fails, the unrelaxed PDB is copied and the sample payload records `relax_fallback: true`.
 
-Outputs under each complex directory include `{i}.pdb`, `{i}_relaxed.pdb`, `{i}_whole.pdb`, `{i}_whole_relaxed.pdb`, and `{i}.sdf`.
+Outputs under each complex directory include `{i}.pdb`, `{i}_relaxed.pdb`, `{i}_whole.pdb`, `{i}_whole_relaxed.pdb`, and `{i}.sdf`. Eval scripts load DONE rows via `load_sample_rows()` (they do not mutate the ledger).
 
 ### 2. Affinity (Vina)
+
+Workflow details: [`eval_affinity.md`](eval_affinity.md).
 
 ```bash
 python reproduction/eval_affinity.py \
@@ -142,11 +159,13 @@ Uses the official-style **10 Å fragment** `{i}_relaxed.pdb`. Default exhaustive
 
 ### 3. Designability (ESMFold, resumable)
 
-Requires Genie-side helpers: default TMscore at `../genie/packages/TMscore/TMscore`, plus ESMFold and ProteinMPNN.
+Requires the `eval` env from [`shell/set_up_genie.sh`](shell/set_up_genie.sh), plus Genie-side helpers: default TMscore at `../genie/packages/TMscore/TMscore`, ESMFold, and ProteinMPNN.
 
 Default is **ProteinMPNN×8** (main paper / README 0.77 protocol). Writes `designability.json` (what [`aggregate_metrics.py`](aggregate_metrics.py) reads) and `designability.jsonl`. Reruns skip `(complex_id, sample_id)` already in the jsonl and rebuild the summary JSON at the end.
 
 ```bash
+micromamba activate eval
+
 # Main protocol: ProteinMPNN x8 + ESMFold, keep lowest scRMSD
 python reproduction/eval_designability.py \
   --sample_dir reproduction/outputs/crossdocked_sample
@@ -184,6 +203,7 @@ Writes `summary.json` / `summary.txt` from whatever metric JSON files are presen
 - **AAR** is computed on **3.5 Å designed residues**, not the full 10 Å pocket crop.
 - **Vina** docks against `{i}_relaxed.pdb` (10 Å fragment), matching official `generate_new.py`. Designability uses whole-protein PDBs. Pocket scRMSD / pLDDT on ESMFold PDBs use **ordinal residue indices** (ESMFold is numbered 1..L), not crystal `designed_resseq`.
 - **OpenMM**: [`sample_crossdocked.py`](sample_crossdocked.py) monkeypatches `openmm_relax` on both `utils.relax` and `models.PD` (PD binds the symbol at import). The patch clears PDBFixer `missingResidues` on discontinuous pocket fragments and copies the unrelaxed PDB to `{stem}_relaxed.pdb` if minimization fails (`relax_fallback` on the sample row).
+- **Resume ledger**: [`utils/resumable_saver.py`](utils/resumable_saver.py) tracks `pending` / `done` / `failed`. Sampling never feeds gapped id lists into one `generate()` call; consecutive-run chunking keeps file names and sample ids aligned.
 - **Paper `±`**: mean ± std over **three independent training runs** with different seeds. Local `mean_std` is variation **within one sampling run**, not the paper `±`.
 - **Table 1 / S2 top-k designability** (rank pockets by Vina, then average structure metrics on top-1/3/5/10) is **not** auto-aggregated here. [`eval_affinity.py`](eval_affinity.py) reports top-k **Vina** only.
 
@@ -191,7 +211,9 @@ Writes `summary.json` / `summary.txt` from whatever metric JSON files are presen
 
 | Script | Role |
 | --- | --- |
-| [`sample_crossdocked.py`](sample_crossdocked.py) | Sample test set; write PDB/SDF + `samples.jsonl` |
+| [`shell/set_up_genie.sh`](shell/set_up_genie.sh) | Clone `eval` from `pocketgen`; overlay ProteinMPNN / ESMFold / TMscore |
+| [`sample_crossdocked.py`](sample_crossdocked.py) | Sample test set; write PDB/SDF + ResumableSaver ledger |
+| [`utils/resumable_saver.py`](utils/resumable_saver.py) | SQLite resume ledger for sample payloads |
 | [`eval_affinity.py`](eval_affinity.py) | AutoDock Vina |
 | [`eval_designability.py`](eval_designability.py) | ESMFold self-consistency / designability |
 | [`eval_ligand.py`](eval_ligand.py) | PoseBusters |
@@ -199,7 +221,7 @@ Writes `summary.json` / `summary.txt` from whatever metric JSON files are presen
 | [`eval_geometry.py`](eval_geometry.py) | Backbone / side-chain geometry KL |
 | [`eval_diversity.py`](eval_diversity.py) | Sequence diversity |
 | [`aggregate_metrics.py`](aggregate_metrics.py) | Combine metric JSONs |
-| [`common.py`](common.py) | Shared helpers |
+| [`common.py`](common.py) | Shared helpers (`load_sample_rows`) |
 
 ## Reference
 

@@ -15,10 +15,9 @@ if _REPO_ROOT not in sys.path:
 from reproduction.common import (
     DEFAULT_OUTPUT_DIR,
     load_json,
-    load_jsonl,
+    load_sample_rows,
     mean_std,
     resolve_repo_path,
-    samples_path,
     write_json,
 )
 
@@ -64,7 +63,7 @@ def fmt(value: Any, digits: int = 3) -> str:
 def main() -> None:
     args = parse_args()
     sample_dir = resolve_repo_path(args.sample_dir)
-    rows = load_jsonl(samples_path(sample_dir))
+    rows = load_sample_rows(sample_dir)
     loaded = {name: maybe_load(os.path.join(sample_dir, filename)) for name, filename in METRIC_FILES.items()}
 
     aar = mean_std([row.get("aar") for row in rows])

@@ -14,7 +14,23 @@ GENIE_ROOT = os.path.abspath(os.path.join(REPO_ROOT, "..", "genie"))
 DEFAULT_TMP_DIR = os.path.join(os.path.dirname(__file__), "tmp")
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "outputs", "crossdocked_sample")
 SAMPLES_JSONL = "samples.jsonl"
-MANIFEST_JSON = "manifest.json"
+
+
+def load_sample_rows(sample_dir: str) -> List[Dict[str, Any]]:
+    """Load DONE sample payloads from the ResumableSaver ledger under sample_dir.
+
+    Eval scripts must not mutate the ledger, so auto_recover is disabled.
+    """
+    from reproduction.utils.resumable_saver import ResumableSaver, SaveStatus
+
+    rows: List[Dict[str, Any]] = []
+    with ResumableSaver(sample_dir, auto_recover=False, retry_failed=False) as saver:
+        for record in saver.list_records(SaveStatus.DONE):
+            payload = saver.load(record.sample_id)
+            if isinstance(payload, dict):
+                rows.append(payload)
+    rows.sort(key=lambda row: (int(row.get("complex_index", 0)), int(row.get("sample_id", 0))))
+    return rows
 
 AA3_TO_1 = {
     "ALA": "A",

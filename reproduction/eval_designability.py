@@ -32,13 +32,13 @@ from reproduction.common import (
     ensure_dir,
     ensure_repo_on_path,
     load_jsonl,
+    load_sample_rows,
     mean_std,
     parse_pdb_residues,
     parse_tmscore_output,
     residue_indices_by_resseq,
     residue_sequence,
     resolve_repo_path,
-    samples_path,
     select_residues_by_index,
     write_json,
 )
@@ -134,10 +134,16 @@ def pocket_and_whole_rmsd(
     return whole, pocket, pocket_plddt
 
 
-def load_esmfold(device: str):
+def _ensure_genie_on_path() -> None:
     genie_pipeline = os.path.join(GENIE_ROOT, "evaluations", "pipeline")
-    if genie_pipeline not in sys.path:
-        sys.path.insert(0, genie_pipeline)
+    genie_packages = os.path.join(GENIE_ROOT, "packages")
+    for path in (genie_pipeline, genie_packages):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
+def load_esmfold(device: str):
+    _ensure_genie_on_path()
     from fold_models.esmfold import ESMFold  # type: ignore
 
     model = ESMFold()
@@ -147,14 +153,12 @@ def load_esmfold(device: str):
 
 
 def load_proteinmpnn():
-    genie_pipeline = os.path.join(GENIE_ROOT, "evaluations", "pipeline")
-    if genie_pipeline not in sys.path:
-        sys.path.insert(0, genie_pipeline)
+    _ensure_genie_on_path()
     from inverse_fold_models.proteinmpnn import ProteinMPNN  # type: ignore
 
     rootdir = os.path.join(GENIE_ROOT, "packages", "ProteinMPNN")
     if not os.path.isdir(rootdir):
-        rootdir = os.path.join(genie_pipeline, "packages", "ProteinMPNN")
+        rootdir = os.path.join(GENIE_ROOT, "evaluations", "pipeline", "packages", "ProteinMPNN")
     return ProteinMPNN(rootdir=rootdir, num_samples=8)
 
 
@@ -233,9 +237,9 @@ def summarize(per_sample: Sequence[Dict[str, Any]], sequence_source: str) -> Dic
 def main() -> None:
     args = parse_args()
     sample_dir = resolve_repo_path(args.sample_dir)
-    rows = load_jsonl(samples_path(sample_dir))
+    rows = load_sample_rows(sample_dir)
     if not rows:
-        raise SystemExit(f"No samples found in {samples_path(sample_dir)}")
+        raise SystemExit(f"No samples found in {sample_dir}")
     tmscore_exec = resolve_repo_path(args.tmscore)
     default_json, _ = default_out_paths(sample_dir, args.sequence_source)
     out_json = args.out_json or default_json
