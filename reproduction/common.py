@@ -16,7 +16,7 @@ DEFAULT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "outputs", "crossdo
 SAMPLES_JSONL = "samples.jsonl"
 
 
-def load_sample_rows(sample_dir: str) -> List[Dict[str, Any]]:
+def load_sample_rows(sample_dir: str, progress: bool = False) -> List[Dict[str, Any]]:
     """Load DONE sample payloads from the ResumableSaver ledger under sample_dir.
 
     Eval scripts must not mutate the ledger, so auto_recover is disabled.
@@ -25,7 +25,13 @@ def load_sample_rows(sample_dir: str) -> List[Dict[str, Any]]:
 
     rows: List[Dict[str, Any]] = []
     with ResumableSaver(sample_dir, auto_recover=False, retry_failed=False) as saver:
-        for record in saver.list_records(SaveStatus.DONE):
+        records = saver.list_records(SaveStatus.DONE)
+        iterator: Iterable[Any] = records
+        if progress:
+            from tqdm import tqdm
+
+            iterator = tqdm(records, desc="Load samples")
+        for record in iterator:
             payload = saver.load(record.sample_id)
             if isinstance(payload, dict):
                 rows.append(payload)

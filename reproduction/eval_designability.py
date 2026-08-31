@@ -85,6 +85,16 @@ def pdb_sequence(pdb_path: str) -> str:
     return residue_sequence(parse_pdb_residues(pdb_path))
 
 
+def write_pdb_chain_a(src: str, dest: str) -> str:
+    """Copy a PDB with ATOM chain IDs rewritten to A for Genie ProteinMPNN."""
+    with open(src, "r") as fin, open(dest, "w") as fout:
+        for line in fin:
+            if line.startswith("ATOM") and len(line) > 21:
+                line = line[:21] + "A" + line[22:]
+            fout.write(line)
+    return dest
+
+
 def run_tmscore(tmscore_exec: str, pdb_a: str, pdb_b: str) -> Dict[str, float]:
     if not os.path.exists(tmscore_exec):
         raise FileNotFoundError(f"TMscore binary not found: {tmscore_exec}")
@@ -266,7 +276,10 @@ def main() -> None:
             if args.sequence_source == "codesign":
                 sequences = [pdb_sequence(generated_pdb)]
             else:
-                sequences = sequences_from_mpnn_text(mpnn_model.predict(generated_pdb))
+                mpnn_pdb = write_pdb_chain_a(
+                    generated_pdb, os.path.join(work_dir, f"{cid}_{sid}_mpnn.pdb")
+                )
+                sequences = sequences_from_mpnn_text(mpnn_model.predict(mpnn_pdb))
             tag = f"{cid}_{sid}"
             best = evaluate_one_structure(
                 fold_model,

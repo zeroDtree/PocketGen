@@ -196,7 +196,17 @@ python reproduction/aggregate_metrics.py \
   --sample_dir reproduction/outputs/crossdocked_sample
 ```
 
-Writes `summary.json` / `summary.txt` from whatever metric JSON files are present.
+Writes `summary.json` / `summary.txt` from whatever metric JSON files are present. Missing groups print `-`.
+
+To report only finished groups (skips unread eval JSONs and, unless `aar`/`rmsd` is requested, the sample ledger):
+
+```bash
+python reproduction/aggregate_metrics.py \
+  --sample_dir reproduction/outputs/crossdocked_sample \
+  --metrics aar,vina
+```
+
+`--metrics` accepts comma- or space-separated names: `aar`, `rmsd`, `affinity` (alias `vina`), `designability`, `ligand` (alias `posebusters`), `interaction`, `geometry`, `diversity`. Default is all groups. A subset still writes `summary.json`; use `--out_json` for a peek file if you do not want to overwrite a later full summary.
 
 ## Implementation notes
 
