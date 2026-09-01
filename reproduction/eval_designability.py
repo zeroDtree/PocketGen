@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out_json", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=256,
+        help="ESMFold axial-attention chunk size. Default 256; 0 leaves the model default (no chunking).",
+    )
     parser.add_argument("--whole_scrmsd_thresh", type=float, default=2.0)
     parser.add_argument("--pocket_scrmsd_thresh", type=float, default=1.0)
     parser.add_argument("--fold_original", action="store_true", help="Also fold the original sequence for Delta scTM.")
@@ -152,13 +158,15 @@ def _ensure_genie_on_path() -> None:
             sys.path.insert(0, path)
 
 
-def load_esmfold(device: str):
+def load_esmfold(device: str, chunk_size: int = 256):
     _ensure_genie_on_path()
     from fold_models.esmfold import ESMFold  # type: ignore
 
     model = ESMFold()
     if hasattr(model, "model"):
         model.model = model.model.to(device)
+        if chunk_size > 0 and hasattr(model.model, "set_chunk_size"):
+            model.model.set_chunk_size(chunk_size)
     return model
 
 
@@ -263,7 +271,7 @@ def main() -> None:
 
     if pending:
         print("Loading ESMFold...")
-        fold_model = load_esmfold(args.device)
+        fold_model = load_esmfold(args.device, chunk_size=args.chunk_size)
         mpnn_model = load_proteinmpnn() if args.sequence_source == "proteinmpnn" else None
         original_cache: Dict[str, Dict[str, float]] = {}
         for row in tqdm(pending, desc="Designability"):
